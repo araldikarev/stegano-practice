@@ -10,7 +10,13 @@ from algorithms.stegano_base import SteganoBase
 from utils.cli import ask_parsed, print_error, print_success, pause
 from utils.images import list_images, open_in_viewer, unique_out_path
 from metrics import compute_metrics_pack
-from utils.plots import show_histograms
+from utils.plots import (
+    show_hist_brightness,
+    show_hist_channel,
+    show_hist_rgb,
+    show_abs_diff_hist_brightness,
+    show_abs_diff_hist_channel,
+)
 
 
 @dataclass
@@ -210,13 +216,40 @@ class SteganoTuiApp:
                         print_error(f"Ошибка метрик: {ex}")
                         pause()
                     continue
-
                 if post.startswith("Показать гистограммы"):
+                    choice = inquirer.select(
+                        message="Графики:",
+                        choices=[
+                            "Brightness histogram (L)",
+                            "Blue histogram (B)",
+                            "RGB histograms (R/G/B)",
+                            "Abs diff histogram (L)",
+                            "Abs diff histogram (B)",
+                            "Назад",
+                        ],
+                        default="Brightness histogram (L)",
+                    ).execute()
+
+                    if choice == "Назад":
+                        continue
+
                     try:
-                        show_histograms(cover, stego_img)
+                        if choice == "Brightness histogram (L)":
+                            show_hist_brightness(cover, stego_img)
+                        elif choice == "Blue histogram (B)":
+                            show_hist_channel(cover, stego_img, channel=2, name="Blue")
+                        elif choice == "RGB histograms (R/G/B)":
+                            show_hist_rgb(cover, stego_img)
+                        elif choice == "Abs diff histogram (L)":
+                            show_abs_diff_hist_brightness(cover, stego_img)
+                        elif choice == "Abs diff histogram (B)":
+                            show_abs_diff_hist_channel(
+                                cover, stego_img, channel=2, name="Blue"
+                            )
                     except Exception as ex:
-                        print_error(f"Ошибка построения гистограмм: {ex}")
+                        print_error(f"Ошибка построения графика: {ex}")
                         pause()
+
                     continue
 
                 if post == "Вернуться":

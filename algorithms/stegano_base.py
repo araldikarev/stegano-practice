@@ -83,21 +83,3 @@ class SteganoBase(ABC):
         return packed.tobytes()
 
     # endregion
-
-    # region Метрики
-    @classmethod
-    def calculate_mse(cls, cover: Image.Image, stego: Image.Image) -> float:
-        a = cls.image_to_array(cover).astype(np.float32)
-        b = cls.image_to_array(stego).astype(np.float32)
-        if a.shape != b.shape:
-            raise ValueError(f"Shape mismatch: {a.shape} vs {b.shape}")
-        return float(np.mean((a - b) ** 2))
-
-    @classmethod
-    def calculate_psnr(cls, cover: Image.Image, stego: Image.Image) -> float:
-        mse = cls.calculate_mse(cover, stego)
-        if mse == 0:
-            return float("inf")
-        return float(10.0 * np.log10((255.0**2) / mse))
-
-    # endregion

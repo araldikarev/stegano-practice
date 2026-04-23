@@ -6,6 +6,8 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
+from algorithms.stegano_base import SteganoBase
+
 
 @dataclass
 class MetricsPack:
@@ -32,12 +34,17 @@ def compute_metrics_pack(
     pack.psnr = psnr_from_mse(pack.mse)
     pack.rmse = rmse_from_mse(pack.mse)
     pack.ssim = ssim(cover, stego)
+    pack.ncc = ncc(cover, stego)
 
     if bits_embedded is not None:
         pack.ec_bpp = ec_bpp(bits_embedded, cover)
 
-    if original_message is not None and extracted_message is not None:
-        pack.ber = ber_from_text(original_message, extracted_message)
+    if (
+        original_message is not None
+        and extracted_message is not None
+        and bits_embedded is not None
+    ):
+        pack.ber = ber_from_text(original_message, extracted_message, bits_embedded)
 
     return pack
 
@@ -61,7 +68,32 @@ def rmse_from_mse(mse_value: float) -> float:
 
 
 def ssim(cover: Image.Image, stego: Image.Image) -> float:
-    raise NotImplementedError("SSIM: реализуй по методичке (обязательная метрика).")
+    cover_flat = np.asarray(cover.convert("RGB"), dtype=np.float64).flatten()
+    stego_flat = np.asarray(stego.convert("RGB"), dtype=np.float64).flatten()
+
+    cover_mean = np.mean(cover_flat)
+    stego_mean = np.mean(stego_flat)
+
+    cover_variance = np.var(cover_flat)
+    stego_variance = np.var(stego_flat)
+
+    covariance_matrix = np.cov(cover_flat, stego_flat)
+    pixel_covariance = covariance_matrix[0, 1]
+
+    dynamic_range = 255
+    k1, k2 = 0.01, 0.03
+    luminance_stabilizer = (k1 * dynamic_range) ** 2  # C1
+    contrast_stabilizer = (k2 * dynamic_range) ** 2  # C2
+
+    numerator = (2 * cover_mean * stego_mean + luminance_stabilizer) * (
+        2 * pixel_covariance + contrast_stabilizer
+    )
+
+    denominator = (cover_mean**2 + stego_mean**2 + luminance_stabilizer) * (
+        cover_variance + stego_variance + contrast_stabilizer
+    )
+
+    return float(numerator/denominator)
 
 
 def ec_bpp(bits_embedded: int, cover: Image.Image) -> float:
@@ -69,9 +101,19 @@ def ec_bpp(bits_embedded: int, cover: Image.Image) -> float:
     return float(bits_embedded) / float(w * h)
 
 
-def ber_from_text(original: str, extracted: str) -> float:
-    raise NotImplementedError("BER: лучше считать по битам payload (или хотя бы по bytes).")
+def ber_from_text(original: str, extracted: str, bits_embedded: int) -> float:
+    original_bits = SteganoBase.bytes_to_bits(original.encode("utf-8"))
+    extracted_bits = SteganoBase.bytes_to_bits(extracted.encode("utf-8"))
+    return np.sum(original_bits != extracted_bits) / bits_embedded
 
 
-def ncc(a: Any, b: Any) -> float:
-    raise NotImplementedError("NCC: реализуй под свою задачу (текст/картинка/вектор).")
+def ncc(cover: Image.Image, stego: Image.Image) -> float:
+    cover_flat = np.asarray(cover.convert("RGB"), dtype=np.float64).flatten()
+    stego_flat = np.asarray(stego.convert("RGB"), dtype=np.float64).flatten()
+    numerator = np.sum(cover_flat * stego_flat)
+    denominator = np.sqrt(np.sum(cover_flat**2) * np.sum(stego_flat**2))
+
+    if denominator == 0:
+        return 0.0
+
+    return float(numerator / denominator)

@@ -11,7 +11,7 @@ from algorithms.stegano_base import SteganoBase
 
 class PM1(SteganoBase):
     def get_name(self) -> str:
-        return "PM1 (RGB)"
+        return "PM1 (Blue channel)"
 
     def get_description(self) -> str:
         return "PM1: 4 байта длины + UTF-8 payload в младших битах Blue канала."
