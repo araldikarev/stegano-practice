@@ -44,6 +44,9 @@ class SteganoBase(ABC):
 
     # region Utils
 
+    def capacity_bits(self, cover_image: Image.Image, **kwargs: Any) -> int | None:
+        return None
+
     def embed_path(
         self,
         cover_path: PathLike,

@@ -34,8 +34,11 @@ def compute_metrics_pack(
     pack.psnr = psnr_from_mse(pack.mse)
     pack.rmse = rmse_from_mse(pack.mse)
     pack.ssim = ssim(cover, stego)
-    pack.ncc = ncc(cover, stego)
-
+    if original_message is not None and extracted_message is not None:
+        pack.ncc = ncc(original_message, extracted_message, bits_limit=bits_embedded)
+    else:
+        pack.ncc = None
+        
     if bits_embedded is not None:
         pack.ec_bpp = ec_bpp(bits_embedded, cover)
 
@@ -104,16 +107,43 @@ def ec_bpp(bits_embedded: int, cover: Image.Image) -> float:
 def ber_from_text(original: str, extracted: str, bits_embedded: int) -> float:
     original_bits = SteganoBase.bytes_to_bits(original.encode("utf-8"))
     extracted_bits = SteganoBase.bytes_to_bits(extracted.encode("utf-8"))
-    return np.sum(original_bits != extracted_bits) / bits_embedded
 
-
-def ncc(cover: Image.Image, stego: Image.Image) -> float:
-    cover_flat = np.asarray(cover.convert("RGB"), dtype=np.float64).flatten()
-    stego_flat = np.asarray(stego.convert("RGB"), dtype=np.float64).flatten()
-    numerator = np.sum(cover_flat * stego_flat)
-    denominator = np.sqrt(np.sum(cover_flat**2) * np.sum(stego_flat**2))
-
-    if denominator == 0:
+    B = int(original_bits.size)
+    if B == 0:
         return 0.0
+    
+    if bits_embedded is not None:
+        B = min(B, int(bits_embedded))
 
-    return float(numerator / denominator)
+    comp_len = min(B, int(extracted_bits.size))
+
+    errors = int(np.sum(original_bits[:comp_len] != extracted_bits[:comp_len]))
+    missing = B - comp_len
+    errors += missing
+    
+
+    return float(errors) / float(B)
+
+
+def ncc(original: str, extracted: str, bits_limit: int | None = None) -> float:
+    w = SteganoBase.bytes_to_bits(original.encode("utf-8")).astype(np.float64)
+    we = SteganoBase.bytes_to_bits(extracted.encode("utf-8")).astype(np.float64)
+    if w.size == 0:
+        return 0.0
+    
+    B = int(w.size)
+    if bits_limit is not None:
+        B = min(B, int(bits_limit))
+
+    if we.size < B:
+        we = np.pad(we, (0, B - int(we.size)), constant_values=0.0)
+    else:
+        we = we[:B]
+    w = w[:B]
+
+    numerator = float(np.sum(w * we))
+    denominator = float(np.sqrt(np.sum(w * w) * np.sum(we * we)))
+
+    if denominator == 0.0:
+        return 0.0
+    return numerator / denominator
