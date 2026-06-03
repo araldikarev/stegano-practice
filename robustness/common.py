@@ -70,7 +70,15 @@ def random_ascii_message(max_bytes: int, *, seed: int = 123) -> str:
 
 def jpeg_roundtrip(img: Image.Image, *, quality: int) -> Image.Image:
     bio = BytesIO()
-    img.convert("RGB").save(bio, format="JPEG", quality=int(quality), optimize=True)
+
+    img.convert("RGB").save(
+        bio,
+        format="JPEG",
+        quality=int(quality),
+        optimize=True,
+        subsampling=0,
+    )
+
     bio.seek(0)
     out = Image.open(bio)
     out.load()

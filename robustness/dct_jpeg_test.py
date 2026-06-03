@@ -18,7 +18,7 @@ from robustness.common import (
 DEFAULT_KWARGS = {
     "direction": "LR",
     "coeff_row_1_based": 2,
-    "coeff_col_1_based": 2,
+    "coeff_col_1_based": 3,
     "T": 80.0,
     "K": 12.0,
     "Z": 2.0,
