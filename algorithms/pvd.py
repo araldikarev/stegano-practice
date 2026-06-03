@@ -6,10 +6,10 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
-from algorithms.stegano_base import SteganoBase
+from algorithms.stegano_text_base import SteganoTextBase
 
 
-class PVD(SteganoBase):
+class PVD(SteganoTextBase):
 
     RANGES = [(0, 7), (8, 15), (16, 31), (32, 63), (64, 127), (128, 255)]
 
@@ -70,7 +70,6 @@ class PVD(SteganoBase):
             found_range = self._find_range(abs_dk)
             if found_range is None:
                 continue
-
 
             n = self._n_for(found_range)
             if n <= 0:

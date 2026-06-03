@@ -27,6 +27,8 @@ def compute_metrics_pack(
     bits_embedded: int | None = None,
     original_message: str | None = None,
     extracted_message: str | None = None,
+    original_watermark: Image.Image | np.ndarray | None = None,
+    extracted_watermark: Image.Image | np.ndarray | None = None,
 ) -> MetricsPack:
     pack = MetricsPack()
 
@@ -34,20 +36,26 @@ def compute_metrics_pack(
     pack.psnr = psnr_from_mse(pack.mse)
     pack.rmse = rmse_from_mse(pack.mse)
     pack.ssim = ssim(cover, stego)
-    if original_message is not None and extracted_message is not None:
-        pack.ncc = ncc(original_message, extracted_message, bits_limit=bits_embedded)
-    else:
-        pack.ncc = None
-        
     if bits_embedded is not None:
         pack.ec_bpp = ec_bpp(bits_embedded, cover)
 
-    if (
-        original_message is not None
-        and extracted_message is not None
-        and bits_embedded is not None
-    ):
+    if original_message is not None and extracted_message is not None:
+        pack.ncc = ncc(original_message, extracted_message, bits_limit=bits_embedded)
         pack.ber = ber_from_text(original_message, extracted_message, bits_embedded)
+    elif original_watermark is not None and extracted_watermark is not None:
+        pack.ncc = ncc_from_watermarks(
+            original_watermark,
+            extracted_watermark,
+            bits_limit=bits_embedded,
+        )
+        pack.ber = ber_from_watermarks(
+            original_watermark,
+            extracted_watermark,
+            bits_limit=bits_embedded,
+        )
+    else:
+        pack.ber = None
+        pack.ncc = None
 
     return pack
 
@@ -104,46 +112,104 @@ def ec_bpp(bits_embedded: int, cover: Image.Image) -> float:
     return float(bits_embedded) / float(w * h)
 
 
+def ber_from_bit_vectors(
+    original_bits: np.ndarray,
+    extracted_bits: np.ndarray,
+    bits_limit: int | None = None,
+) -> float:
+    total_bits = int(original_bits.size)
+    if total_bits == 0:
+        return 0.0
+
+    if bits_limit is not None:
+        total_bits = min(total_bits, int(bits_limit))
+
+    original_view = original_bits[:total_bits]
+    extracted_view = extracted_bits[:total_bits]
+    compared_bits = min(total_bits, int(extracted_view.size))
+
+    errors = int(np.sum(original_view[:compared_bits] != extracted_view[:compared_bits]))
+    errors += total_bits - compared_bits
+    return float(errors) / float(total_bits)
+
+
 def ber_from_text(original: str, extracted: str, bits_embedded: int) -> float:
     original_bits = SteganoBase.bytes_to_bits(original.encode("utf-8"))
     extracted_bits = SteganoBase.bytes_to_bits(extracted.encode("utf-8"))
+    return ber_from_bit_vectors(original_bits, extracted_bits, bits_embedded)
 
-    B = int(original_bits.size)
-    if B == 0:
+
+def ncc_from_bit_vectors(
+    original_bits: np.ndarray,
+    extracted_bits: np.ndarray,
+    bits_limit: int | None = None,
+) -> float:
+    original_view = original_bits.astype(np.float64)
+    extracted_view = extracted_bits.astype(np.float64)
+
+    if original_view.size == 0:
         return 0.0
-    
-    if bits_embedded is not None:
-        B = min(B, int(bits_embedded))
 
-    comp_len = min(B, int(extracted_bits.size))
-
-    errors = int(np.sum(original_bits[:comp_len] != extracted_bits[:comp_len]))
-    missing = B - comp_len
-    errors += missing
-    
-
-    return float(errors) / float(B)
-
-
-def ncc(original: str, extracted: str, bits_limit: int | None = None) -> float:
-    w = SteganoBase.bytes_to_bits(original.encode("utf-8")).astype(np.float64)
-    we = SteganoBase.bytes_to_bits(extracted.encode("utf-8")).astype(np.float64)
-    if w.size == 0:
-        return 0.0
-    
-    B = int(w.size)
+    total_bits = int(original_view.size)
     if bits_limit is not None:
-        B = min(B, int(bits_limit))
+        total_bits = min(total_bits, int(bits_limit))
 
-    if we.size < B:
-        we = np.pad(we, (0, B - int(we.size)), constant_values=0.0)
+    original_view = original_view[:total_bits]
+    if extracted_view.size < total_bits:
+        extracted_view = np.pad(
+            extracted_view,
+            (0, total_bits - int(extracted_view.size)),
+            constant_values=0.0,
+        )
     else:
-        we = we[:B]
-    w = w[:B]
+        extracted_view = extracted_view[:total_bits]
 
-    numerator = float(np.sum(w * we))
-    denominator = float(np.sqrt(np.sum(w * w) * np.sum(we * we)))
+    numerator = float(np.sum(original_view * extracted_view))
+    denominator = float(
+        np.sqrt(np.sum(original_view * original_view) * np.sum(extracted_view * extracted_view))
+    )
 
     if denominator == 0.0:
         return 0.0
     return numerator / denominator
+
+
+def ncc(original: str, extracted: str, bits_limit: int | None = None) -> float:
+    original_bits = SteganoBase.bytes_to_bits(original.encode("utf-8"))
+    extracted_bits = SteganoBase.bytes_to_bits(extracted.encode("utf-8"))
+    return ncc_from_bit_vectors(original_bits, extracted_bits, bits_limit)
+
+
+def _watermark_to_bits(watermark: Image.Image | np.ndarray) -> np.ndarray:
+    if isinstance(watermark, Image.Image):
+        arr = np.asarray(watermark.convert("L"), dtype=np.uint8)
+    else:
+        arr = np.asarray(watermark)
+        if arr.ndim == 3:
+            arr = arr[..., 0]
+        arr = arr.astype(np.uint8)
+    return (arr > 127).astype(np.uint8).reshape(-1)
+
+
+def ber_from_watermarks(
+    original: Image.Image | np.ndarray,
+    extracted: Image.Image | np.ndarray,
+    bits_limit: int | None = None,
+) -> float:
+    return ber_from_bit_vectors(
+        _watermark_to_bits(original),
+        _watermark_to_bits(extracted),
+        bits_limit,
+    )
+
+
+def ncc_from_watermarks(
+    original: Image.Image | np.ndarray,
+    extracted: Image.Image | np.ndarray,
+    bits_limit: int | None = None,
+) -> float:
+    return ncc_from_bit_vectors(
+        _watermark_to_bits(original),
+        _watermark_to_bits(extracted),
+        bits_limit,
+    )

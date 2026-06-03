@@ -75,3 +75,25 @@ def jpeg_roundtrip(img: Image.Image, *, quality: int) -> Image.Image:
     out = Image.open(bio)
     out.load()
     return out.convert("RGB")
+
+
+def build_test_watermark(size: tuple[int, int]) -> Image.Image:
+    width, height = size
+    if width <= 0 or height <= 0:
+        raise ValueError(f"Некорректный размер ЦВЗ: {size}")
+
+    arr = np.zeros((height, width), dtype=np.uint8)
+    yy, xx = np.indices((height, width))
+    arr[(xx + yy) % 2 == 0] = 255
+
+    inner_top = max(1, height // 6)
+    inner_bottom = max(inner_top + 1, height - height // 6)
+    inner_left = max(1, width // 6)
+    inner_right = max(inner_left + 1, width - width // 6)
+    arr[inner_top:inner_bottom, inner_left:inner_right] = 0
+
+    diag_limit = min(height, width)
+    arr[np.arange(diag_limit), np.arange(diag_limit)] = 255
+    arr[np.arange(diag_limit), width - 1 - np.arange(diag_limit)] = 255
+
+    return Image.fromarray(arr, mode="L")

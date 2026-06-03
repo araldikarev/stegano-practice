@@ -2,11 +2,15 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+import numpy as np
 from InquirerPy import inquirer
+from PIL import Image
 
 from algorithms.stegano_base import SteganoBase
+from algorithms.stegano_text_base import SteganoTextBase
+from algorithms.stegano_watermark_base import SteganoWatermarkBase
 from utils.cli import ask_parsed, print_error, print_success, pause
 from utils.images import list_images, open_in_viewer, unique_out_path
 from metrics import compute_metrics_pack
@@ -25,9 +29,21 @@ class TuiConfig:
     results_dir: Path = Path("results")
 
 
+@dataclass
+class AlgorithmChoice:
+    kind: Literal["text", "watermark"]
+    algorithm: SteganoBase
+
+
 class SteganoTuiApp:
-    def __init__(self, algorithms: list[SteganoBase], config: TuiConfig | None = None):
-        self.algorithms = algorithms
+    def __init__(
+        self,
+        text_algorithms: list[SteganoTextBase],
+        watermark_algorithms: list[SteganoWatermarkBase] | None = None,
+        config: TuiConfig | None = None,
+    ):
+        self.text_algorithms = text_algorithms
+        self.watermark_algorithms = watermark_algorithms or []
         self.config = config or TuiConfig()
 
     def run(self) -> None:
@@ -115,34 +131,103 @@ class SteganoTuiApp:
                     return "pick_image"
                 continue
 
-    def _choose_algorithm(self) -> SteganoBase | None:
-        amap = {a.get_name(): a for a in self.algorithms}
+    def _choose_algorithm(self) -> AlgorithmChoice | None:
+        sections: dict[str, tuple[Literal["text", "watermark"], list[SteganoBase]]] = {}
+        if self.text_algorithms:
+            sections["Text steganography (скрытие текста)"] = (
+                "text",
+                list(self.text_algorithms),
+            )
+        if self.watermark_algorithms:
+            sections["Digital watermarking (ЦВЗ / watermark)"] = (
+                "watermark",
+                list(self.watermark_algorithms),
+            )
+
+        section = inquirer.select(
+            message="Раздел методов:",
+            choices=list(sections.keys()) + ["Назад"],
+        ).execute()
+
+        if section == "Назад":
+            return None
+
+        kind, algorithms = sections[section]
+        amap = {a.get_name(): a for a in algorithms}
         choice = inquirer.select(
             message="Выбор метода:",
             choices=list(amap.keys()) + ["Назад"],
         ).execute()
+
         if choice == "Назад":
             return None
-        return amap[choice]
+
+        return AlgorithmChoice(kind=kind, algorithm=amap[choice])
 
     def _ask_algo_kwargs(self, algo: SteganoBase) -> dict[str, Any]:
         kwargs: dict[str, Any] = {}
-        params = algo.get_arguments_to_setup() or {}
-        for name, parser in params.items():
+        for name, parser in (algo.get_arguments_to_setup() or {}).items():
             kwargs[name] = ask_parsed(name, parser)
         return kwargs
 
+    @staticmethod
+    def _ask_existing_file(prompt: str) -> Path:
+        def parse_file_path(text: str) -> Path:
+            cleaned_text = text.strip().strip("'\"")
+            path = Path(cleaned_text).expanduser()
+            
+            if not path.exists():
+                raise ValueError(f"Путь не существует: {path}")
+            if not path.is_file():
+                raise ValueError(f"Путь ведет не на файл: {path}")
+                
+            return path
+
+        # Передаем функцию валидации в ask_parsed
+        return ask_parsed(prompt, parse_file_path)
+
+    @staticmethod
+    def _load_image(path: Path) -> Image.Image:
+        img = Image.open(path)
+        img.load()
+        return img
+
     def _embed(self, img_path: Path) -> str:
-        algo = self._choose_algorithm()
-        if algo is None:
+        chosen = self._choose_algorithm()
+        if chosen is None:
             return "image_actions"
 
         try:
-            kwargs = self._ask_algo_kwargs(algo)
-            message = ask_parsed("message (сообщение)", str)
+            kwargs = self._ask_algo_kwargs(chosen.algorithm)
+            cover = self._load_image(img_path)
 
-            cover = algo.load_image(img_path)
-            stego_img, extra = algo.embed(cover, message, **kwargs)
+            original_message: str | None = None
+            original_watermark: Image.Image | None = None
+            bits_embedded = None
+
+            if chosen.kind == "text":
+                algo = chosen.algorithm
+                if not isinstance(algo, SteganoTextBase):
+                    raise TypeError("Выбранный метод не является SteganoTextBase")
+
+                message = ask_parsed("message (сообщение)", str)
+                stego_img, extra = algo.embed(cover, message, **kwargs)
+                original_message = message
+
+            else:
+                algo = chosen.algorithm
+                if not isinstance(algo, SteganoWatermarkBase):
+                    raise TypeError("Выбранный метод не является SteganoWatermarkBase")
+
+                watermark_path = self._ask_existing_file(
+                    "watermark_path (путь к изображению-ЦВЗ)"
+                )
+                watermark = self._load_image(watermark_path)
+                stego_img, extra = algo.embed(cover, watermark, **kwargs)
+                if isinstance(extra, dict) and isinstance(extra.get("prepared_watermark"), Image.Image):
+                    original_watermark = extra["prepared_watermark"]
+                else:
+                    original_watermark = watermark
 
             out_path = unique_out_path(
                 self.config.images_dir,
@@ -152,7 +237,6 @@ class SteganoTuiApp:
             )
             stego_img.save(out_path)
 
-            bits_embedded = None
             if isinstance(extra, dict):
                 if "bits_embedded" in extra:
                     bits_embedded = int(extra["bits_embedded"])
@@ -185,7 +269,7 @@ class SteganoTuiApp:
                 if post.startswith("Показать метрики"):
                     extracted = None
                     try:
-                        extracted = algo.extract(stego_img, **kwargs)
+                        extracted = chosen.algorithm.extract(stego_img, **kwargs)
                     except Exception:
                         extracted = None
 
@@ -194,8 +278,14 @@ class SteganoTuiApp:
                             cover,
                             stego_img,
                             bits_embedded=bits_embedded,
-                            original_message=message,
-                            extracted_message=extracted,
+                            original_message=original_message,
+                            extracted_message=(
+                                extracted if isinstance(extracted, str) else None
+                            ),
+                            original_watermark=original_watermark,
+                            extracted_watermark=(
+                                extracted if isinstance(extracted, Image.Image) else None
+                            ),
                         )
                         print()
                         print_success(
@@ -216,6 +306,7 @@ class SteganoTuiApp:
                         print_error(f"Ошибка метрик: {ex}")
                         pause()
                     continue
+
                 if post.startswith("Показать гистограммы"):
                     choice = inquirer.select(
                         message="Графики:",
@@ -263,33 +354,61 @@ class SteganoTuiApp:
             pause()
             return "image_actions"
 
-    def _extract(self, img_path: Path) -> str:
-        MAX_PREVIEW = 100
+    def _show_or_save_extracted_result(self, extracted: Any, img_path: Path) -> None:
+        if isinstance(extracted, Image.Image):
+            out_img = unique_out_path(
+                self.config.results_dir,
+                prefix="extract",
+                base_stem=img_path.stem,
+                ext=".png",
+            )
+            extracted.save(out_img)
+            print(f"\nИзвлечённое изображение сохранено: {out_img}\n")
+            return
 
-        algo = self._choose_algorithm()
-        if algo is None:
+        if isinstance(extracted, np.ndarray):
+            arr = np.clip(extracted, 0, 255).astype(np.uint8)
+            out_img = unique_out_path(
+                self.config.results_dir,
+                prefix="extract",
+                base_stem=img_path.stem,
+                ext=".png",
+            )
+            Image.fromarray(arr).save(out_img)
+            print(f"\nИзвлечённая матрица сохранена как изображение: {out_img}\n")
+            return
+
+        msg = str(extracted)
+
+        print("\nИзвлечённое сообщение:\n")
+
+        if len(msg) <= 100:
+            print_success(msg)
+            print()
+            return
+
+        preview = msg[:100]
+        print_success(preview + "...")
+        out_txt = unique_out_path(
+            self.config.results_dir,
+            prefix="extract",
+            base_stem=img_path.stem,
+            ext=".txt",
+        )
+        out_txt.write_text(msg, encoding="utf-8")
+        print(f"\nПолный текст сохранён в: {out_txt}\n")
+
+    def _extract(self, img_path: Path) -> str:
+        chosen = self._choose_algorithm()
+        if chosen is None:
             return "image_actions"
 
         try:
-            kwargs = self._ask_algo_kwargs(algo)
-            msg = algo.extract_path(img_path, **kwargs)
+            kwargs = self._ask_algo_kwargs(chosen.algorithm)
+            stego = self._load_image(img_path)
+            extracted = chosen.algorithm.extract(stego, **kwargs)
 
-            print("\nИзвлечённое сообщение:\n")
-
-            if len(msg) <= MAX_PREVIEW:
-                print_success(msg)
-                print()
-            else:
-                preview = msg[:MAX_PREVIEW]
-                print_success(preview + "...")
-                out_txt = unique_out_path(
-                    self.config.results_dir,
-                    prefix="extract",
-                    base_stem=img_path.stem,
-                    ext=".txt",
-                )
-                out_txt.write_text(msg, encoding="utf-8")
-                print(f"\nПолный текст сохранён в: {out_txt}\n")
+            self._show_or_save_extracted_result(extracted, img_path)
 
             post = inquirer.select(
                 message="Дальше:",

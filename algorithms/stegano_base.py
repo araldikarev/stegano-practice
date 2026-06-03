@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from pathlib import Path
-from typing import Any, Callable, Union
+from typing import Any, Callable
 
 import numpy as np
 from PIL import Image
-
-PathLike = Union[str, Path]
 
 
 class SteganoBase(ABC):
@@ -23,49 +20,12 @@ class SteganoBase(ABC):
     def get_arguments_to_setup(self) -> dict[str, Callable[[str], Any]]:
         return {}
 
-    @abstractmethod
-    def embed(
-        self,
-        cover_image: Image.Image,
-        message: str,
-        **kwargs: Any,
-    ) -> tuple[Image.Image, dict[str, Any]]:
-        pass
-
-    @abstractmethod
-    def extract(
-        self,
-        stego_image: Image.Image,
-        **kwargs: Any,
-    ) -> str:
-        pass
+    def capacity_bits(self, cover_image: Image.Image, **kwargs: Any) -> int | None:
+        return None
 
     # endregion
 
     # region Utils
-
-    def capacity_bits(self, cover_image: Image.Image, **kwargs: Any) -> int | None:
-        return None
-
-    def embed_path(
-        self,
-        cover_path: PathLike,
-        message: str,
-        **kwargs: Any,
-    ) -> tuple[Image.Image, dict[str, Any]]:
-        cover = self.load_image(cover_path)
-        return self.embed(cover, message, **kwargs)
-
-    def extract_path(self, stego_path: PathLike, **kwargs: Any) -> str:
-        stego = self.load_image(stego_path)
-        return self.extract(stego, **kwargs)
-
-    @staticmethod
-    def load_image(path: PathLike) -> Image.Image:
-        img = Image.open(path)
-        img.load()
-        return img
-
     @staticmethod
     def image_to_array(img: Image.Image, *, mode: str = "RGB") -> np.ndarray:
         return np.asarray(img.convert(mode), dtype=np.uint8)

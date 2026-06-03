@@ -1,14 +1,14 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any
 
 import numpy as np
 from PIL import Image
 
-from algorithms.stegano_base import SteganoBase
+from algorithms.stegano_text_base import SteganoTextBase
 
 
-class LSB(SteganoBase):
+class LSB(SteganoTextBase):
     def get_name(self) -> str:
         return "LSB (Blue Channel)"
 
